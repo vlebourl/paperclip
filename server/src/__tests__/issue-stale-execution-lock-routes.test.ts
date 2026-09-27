@@ -132,6 +132,42 @@ describeEmbeddedPostgres("stale issue execution lock routes", () => {
     };
   }
 
+  it("binds an unassigned run on checkout and recovers owned writes after restart", async () => {
+    const { companyId, agentId, currentRunId } = await seedCompanyAgentAndRuns();
+    const issueId = randomUUID();
+    const otherIssueId = randomUUID();
+    await db.insert(issues).values([
+      { id: issueId, companyId, title: "Acquired issue", status: "todo", priority: "high" },
+      { id: otherIssueId, companyId, title: "Other issue", status: "todo", priority: "high" },
+    ]);
+    const actor = agentActor(companyId, agentId, currentRunId);
+    const checkout = await request(createApp(actor))
+      .post(`/api/issues/${issueId}/checkout`)
+      .send({ agentId, expectedStatuses: ["todo"] });
+    expect(checkout.status, JSON.stringify(checkout.body)).toBe(200);
+    const [boundRun] = await db.select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+      .from(heartbeatRuns).where(eq(heartbeatRuns.id, currentRunId));
+    expect(boundRun.contextSnapshot?.issueId).toBe(issueId);
+
+    // Simulate the legacy persisted state and a restarted HTTP process.
+    await db.update(heartbeatRuns).set({ contextSnapshot: {} })
+      .where(eq(heartbeatRuns.id, currentRunId));
+    const restartedApp = createApp(actor);
+    const comment = await request(restartedApp)
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "Progress after restart" });
+    expect(comment.status, JSON.stringify(comment.body)).toBe(201);
+    const disposition = await request(restartedApp)
+      .patch(`/api/issues/${issueId}`)
+      .send({ title: "Acquired issue updated" });
+    expect(disposition.status, JSON.stringify(disposition.body)).toBe(200);
+    const unrelated = await request(restartedApp)
+      .post(`/api/issues/${otherIssueId}/comments`)
+      .send({ body: "Out of scope" });
+    expect(unrelated.status).toBe(403);
+    expect(unrelated.body.details?.code).toBe("cross_issue_influence_run_context_required");
+  });
+
   it("allows an assigned agent PATCH to recover a terminal stale executionRunId", async () => {
     const { companyId, agentId, failedRunId, currentRunId } = await seedCompanyAgentAndRuns();
     const issueId = randomUUID();

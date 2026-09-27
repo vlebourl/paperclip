@@ -10,6 +10,7 @@ import {
 function counterDb(
   initialCount = 0,
   runOverrides: Record<string, unknown> | null = {},
+  ownedIssue: { id: string } | null = null,
 ) {
   let observedCount = initialCount;
   const inserted: Array<Record<string, unknown>> = [];
@@ -21,6 +22,9 @@ function counterDb(
             return {
               then: (resolve: (rows: unknown[]) => unknown) => resolve([{ count: observedCount }]),
             };
+          }
+          if (Object.keys(selection).length === 1 && Object.keys(selection)[0] === "id") {
+            return { then: (resolve: (rows: unknown[]) => unknown) => resolve(ownedIssue ? [ownedIssue] : []) };
           }
           return {
             for: () => ({
@@ -212,5 +216,27 @@ describe("cross-issue influence limit rollout", () => {
       details: { code: "cross_issue_influence_run_context_required" },
     });
     expect(fake.inserted).toEqual([]);
+  });
+
+  it("allows only the issue owned by a checked-out run with no source context", async () => {
+    const targetIssueId = "55555555-5555-4555-8555-555555555555";
+    const input = {
+      companyId: "22222222-2222-4222-8222-222222222222",
+      runId: "11111111-1111-4111-8111-111111111111",
+      agentId: "33333333-3333-4333-8333-333333333333",
+      targetIssueId,
+      kind: "comment" as const,
+    };
+    const owned = counterDb(0, { contextSnapshot: {} }, { id: targetIssueId });
+    await expect(observeCrossIssueInfluence(owned.db as never, input)).resolves.toBeNull();
+    expect(owned.inserted).toEqual([]);
+
+    const unowned = counterDb(0, { contextSnapshot: {} });
+    await expect(observeCrossIssueInfluence(unowned.db as never, { ...input, kind: "update" }))
+      .rejects.toMatchObject({
+        status: 403,
+        details: { code: "cross_issue_influence_run_context_required" },
+      });
+    expect(unowned.inserted).toEqual([]);
   });
 });

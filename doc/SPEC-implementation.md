@@ -622,6 +622,12 @@ rollout mode, and fails closed with the cap in the error once enforcement is
 active. Writes to the run's own source issue are not counted. Assignee self-comments do not
 wake the assignee, and a non-assignee comment cannot mint a mention grant.
 
+When an unassigned run checks out its first issue, checkout records that issue
+as the run source without replacing an existing source. A run from before this
+binding may comment on or update only an issue whose checkout and execution
+locks both name that run and whose assignee matches the run agent. It cannot
+use the cross-issue write budget until it has a persisted source issue.
+
 Agent-authored issue comments persist the responsible user derived from the
 authenticated actor; clients cannot choose that attribution. Each comment also
 records the write-policy reason, and spoof attempts fail with an audited 422.

@@ -15174,6 +15174,25 @@ export function issueRoutes(
         }
         throw error;
       }
+      if (
+        req.actor.type === "agent" &&
+        checkoutRunId &&
+        updated?.checkoutRunId === checkoutRunId &&
+        updated.executionRunId === checkoutRunId
+      ) {
+        // A run started without an issue may acquire its first task through
+        // checkout. Bind only an empty source, and never retarget a run that
+        // already has an issue-scoped context.
+        await db.update(heartbeatRuns).set({
+          contextSnapshot: sql`jsonb_set(coalesce(${heartbeatRuns.contextSnapshot}, '{}'::jsonb), '{issueId}', to_jsonb(${updated.id}::text), true)`,
+        }).where(and(
+          eq(heartbeatRuns.id, checkoutRunId),
+          eq(heartbeatRuns.companyId, updated.companyId),
+          eq(heartbeatRuns.agentId, req.actor.agentId!),
+          sql`${heartbeatRuns.contextSnapshot}->>'issueId' is null`,
+          sql`${heartbeatRuns.contextSnapshot}->>'taskId' is null`,
+        ));
+      }
       const actor = getActorInfo(req);
       if (updated?.harnessKind === "skill_test") {
         await companySkillsSvc.markTestRunRunning(

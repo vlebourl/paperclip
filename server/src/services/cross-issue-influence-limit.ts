@@ -1,6 +1,6 @@
 import { and, count, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, heartbeatRuns } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 import { isUuidLike, issueWriteDenialResponse } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -110,7 +110,20 @@ export async function observeCrossIssueInfluence(
     }
 
     const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
-    if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
+    if (!sourceIssueId) {
+      // Older unassigned runs can acquire an issue lock before their run
+      // context is bound. The persisted lock is sufficient authority for that
+      // issue only; it must not grant a cross-issue write budget.
+      const ownedIssue = await tx.select({ id: issues.id }).from(issues).where(and(
+        eq(issues.id, input.targetIssueId),
+        eq(issues.companyId, input.companyId),
+        eq(issues.assigneeAgentId, input.agentId),
+        eq(issues.checkoutRunId, input.runId),
+        eq(issues.executionRunId, input.runId),
+      )).then((rows) => rows[0] ?? null);
+      if (ownedIssue) return null;
+      throw crossIssueInfluenceRunContextError();
+    }
     if (
       sourceIssueId === input.targetIssueId ||
       (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
